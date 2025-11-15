@@ -6,17 +6,20 @@
 <body>
   <h2>Products</h2>
   <ul id="productList"></ul>
+  
   <h3>Cart</h3>
   <ul id="cartList"></ul>
   <button onclick="checkout()">Checkout</button>
   <button onclick="logout()">Logout</button>
+  
+  <div id="salesHistory" style="margin-top: 40px;"></div>
+  
   <script src="script.js"></script>
 </body>
 </html>
 
 <style>
-
-  body {
+body {
   font-family: "Segoe UI", Tahoma, sans-serif;
   background-color: #f5f7fa;
   color: #333;
@@ -63,6 +66,11 @@ button:hover {
   background-color: #2980b9;
 }
 
+button:disabled {
+  background-color: #95a5a6;
+  cursor: not-allowed;
+}
+
 #cartList li {
   background-color: #ecf0f1;
 }
@@ -71,7 +79,13 @@ button:hover {
   background-color: #2ecc71;
 }
 
-#productList li button:hover {
+#productList li button:hover:not(:disabled) {
   background-color: #27ae60;
+}
+
+#salesHistory {
+  max-width: 600px;
+  margin: 40px auto;
+  text-align: left;
 }
 </style>
