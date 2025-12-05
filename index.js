@@ -103,7 +103,7 @@ app.get("/products", async (req, res) => {
 
       return {
         ...p,
-        quantity: p.quantity || 25,
+        quantity: p.qty !== undefined ? p.qty : 0,
         image,
       };
     });

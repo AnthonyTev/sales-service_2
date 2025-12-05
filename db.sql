@@ -1,5 +1,11 @@
 -- Sales Service Database Schema
 
+
+CREATE DATABASE salesdb;
+
+CREATE USER salesuser WITH PASSWORD 'yourpassword';
+GRANT ALL PRIVILEGES ON DATABASE salesdb TO salesuser;
+
 CREATE TABLE IF NOT EXISTS sales (
     id SERIAL PRIMARY KEY,
     username VARCHAR(100) NOT NULL,

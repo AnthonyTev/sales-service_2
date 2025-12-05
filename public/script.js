@@ -171,15 +171,27 @@ async function loadSalesHistory() {
     `;
     
     const date = new Date(sale.sale_date).toLocaleString();
+    
+    // Create a better formatted items list
     const itemsList = sale.items.map(item => 
-      `${item.product_name} x${item.quantity}`
-    ).join(", ");
+      `<div style="margin: 5px 0; padding-left: 10px;">
+        • ${item.product_name} 
+        <strong>x${item.quantity}</strong> 
+        @ ₱${parseFloat(item.price).toFixed(2)} 
+        = ₱${parseFloat(item.subtotal).toFixed(2)}
+      </div>`
+    ).join("");
     
     saleDiv.innerHTML = `
       <strong>Sale #${sale.id}</strong> - ${sale.username}<br>
       <small>${date}</small><br>
-      Items: ${itemsList}<br>
-      <strong>Total: ₱${parseFloat(sale.total_amount).toFixed(2)}</strong>
+      <div style="margin-top: 10px;">
+        <strong>Items:</strong>
+        ${itemsList}
+      </div>
+      <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee;">
+        <strong>Total: ₱${parseFloat(sale.total_amount).toFixed(2)}</strong>
+      </div>
     `;
     
     container.appendChild(saleDiv);
