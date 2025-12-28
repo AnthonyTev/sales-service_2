@@ -159,34 +159,42 @@ app.post("/checkout", async (req, res) => {
         
         const productData = await response.json();
         
-        // --- DEBUG LOGGING: See exactly what the Inventory sends ---
-        console.log(`Checking stock for ${item.id}:`, productData);
-
-        // --- ROBUST FIX: Check all common casing variations ---
-        // This handles 'Qty', 'qty', or 'quantity' automatically
-        const currentStock = productData.Qty ?? productData.qty ?? productData.quantity ?? 0;
+        // --- FIX STARTS HERE ---
         
-        // Use lowercase 'qty' for the cart item (this comes from your session)
-        const requestedQty = item.qty; 
+        // 1. Force the cart quantity to be a Number (handles "1" vs 1)
+        const sellQty = Number(item.qty);
+
+        // 2. Find the correct Key in the Inventory Object (Case Insensitive)
+        // This finds 'Qty', 'qty', 'Quantity', or 'quantity' automatically.
+        const inventoryKey = Object.keys(productData).find(key => 
+            key.toLowerCase() === 'qty' || key.toLowerCase() === 'quantity'
+        );
+
+        // 3. Get Current Stock as a Number
+        // If the DB has garbage data (NaN) or key is missing, treat it as 0.
+        let currentStock = inventoryKey ? Number(productData[inventoryKey]) : 0;
+        if (isNaN(currentStock)) currentStock = 0; 
+
+        // Debug Log to see exactly what is happening
+        console.log(`Item ${item.id}: Stock=${currentStock}, Selling=${sellQty}, Key=${inventoryKey}`);
 
         // B. Check stock
-        if (currentStock < requestedQty) {
-            throw new Error(`Not enough stock for ${productData.name}. (Has: ${currentStock}, Needs: ${requestedQty})`);
+        if (currentStock < sellQty) {
+            throw new Error(`Not enough stock for ${productData.name}. (Has: ${currentStock}, Needs: ${sellQty})`);
         }
 
         // C. Calculate new quantity
-        const newStock = currentStock - requestedQty;
+        const newStock = currentStock - sellQty;
 
         // D. UPDATE INVENTORY
-        // We send back the exact object we received, but with the updated quantity property.
-        // We explicitly update 'Qty' because you confirmed the DB expects that.
+        // Create a copy of the data and update the specific key we found
         const updateBody = { ...productData };
-        
-        // Ensure we update the correct field name that holds the data
-        if (productData.hasOwnProperty('Qty')) updateBody.Qty = newStock;
-        else if (productData.hasOwnProperty('qty')) updateBody.qty = newStock;
-        else if (productData.hasOwnProperty('quantity')) updateBody.quantity = newStock;
-        else updateBody.Qty = newStock; // Default fallback
+        if (inventoryKey) {
+            updateBody[inventoryKey] = newStock;
+        } else {
+            // Fallback if the object didn't have a quantity field at all
+            updateBody.Qty = newStock; 
+        }
 
         await fetch(productUrl, {
             method: "PUT",
@@ -195,11 +203,11 @@ app.post("/checkout", async (req, res) => {
         });
 
         // E. Add to total for Sales DB
-        totalAmount += productData.price * requestedQty;
+        totalAmount += Number(productData.price) * sellQty;
         
         return {
             product_id: item.id,
-            quantity: requestedQty,
+            quantity: sellQty,
             price: productData.price
         };
     }));
