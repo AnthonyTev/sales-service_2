@@ -35,21 +35,14 @@ cd sales-service_2
 
 ```bash
 npm install
+npm install ws
 ```
 
 ### 3. Configure PostgreSQL
 
 - Create a database
 
-```sql
-CREATE DATABASE salesdb;
-```
-
-- Create a user:
-
-```sql
-CREATE USER salesuser WITH PASSWORD 'yourpassword';
-GRANT ALL PRIVILEGES ON DATABASE salesdb TO salesuser;
+paste db.sql's contents into psql
 ```
 
 - Update your `.env` file with DB credentials:

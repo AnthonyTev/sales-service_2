@@ -10,7 +10,8 @@
     "bcrypt": "^5.1.1",
     "express": "^4.21.2",
     "express-session": "^1.18.2",
-    "pg": "^8.16.3"
+    "pg": "^8.16.3",
+    "ws": "^8.18.3"
   },
   "description": "",
   "keywords": [],
