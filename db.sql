@@ -1,10 +1,10 @@
--- Sales Service Database Schema
-
-
+-- do these in postgre before copypasting
 CREATE DATABASE salesdb;
-
 CREATE USER salesuser WITH PASSWORD 'yourpassword';
 GRANT ALL PRIVILEGES ON DATABASE salesdb TO salesuser;
+\c salesdb
+
+--Copypaste the rest inside salesdb
 
 CREATE TABLE IF NOT EXISTS sales (
     id SERIAL PRIMARY KEY,
@@ -17,10 +17,7 @@ CREATE TABLE IF NOT EXISTS sale_items (
     id SERIAL PRIMARY KEY,
     sale_id INTEGER REFERENCES sales(id) ON DELETE CASCADE,
     product_id INTEGER NOT NULL,
-    product_name VARCHAR(200) NOT NULL,
-    price DECIMAL(10, 2) NOT NULL,
-    quantity INTEGER NOT NULL,
-    subtotal DECIMAL(10, 2) NOT NULL
+    quantity INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_sales_username ON sales(username);
@@ -34,10 +31,7 @@ SELECT
     s.total_amount,
     s.sale_date,
     si.product_id,
-    si.product_name,
-    si.price,
-    si.quantity,
-    si.subtotal
+    si.quantity
 FROM sales s
 LEFT JOIN sale_items si ON s.id = si.sale_id
 ORDER BY s.sale_date DESC;

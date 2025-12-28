@@ -7,6 +7,8 @@ import { WebSocketServer } from "ws";
 import http from "http";
 import pool from "./db.js";
 
+const INVENTORY_SERVICE_URL = "http://localhost:5145/api/inventory";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -32,11 +34,9 @@ function broadcast(data) {
   });
 }
 
-// ---------------- Middleware ----------------
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// 🔥 FIXED CSP (SignalR + Cloudinary + WebSockets allowed)
 app.use((req, res, next) => {
   res.setHeader(
     "Content-Security-Policy",
@@ -60,7 +60,7 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const INVENTORY_API = "http://localhost:5145/api/inventory";
 
-// ---------------- Auth ----------------
+//auth
 app.get("/", (req, res) => res.redirect("/login.html"));
 
 app.post("/login", (req, res) => {
@@ -76,7 +76,6 @@ app.post("/logout", (req, res) => {
   req.session.destroy(() => res.json({ success: true }));
 });
 
-// ---------------- Products ----------------
 app.get("/products", async (req, res) => {
   if (!req.session.user)
     return res.status(401).json({ error: "Unauthorized" });
@@ -87,12 +86,12 @@ app.get("/products", async (req, res) => {
 
     const products = await inventoryRes.json();
 
-    // 🔥 USE INVENTORY IMAGE (uri)
     const mapped = products.map((p) => ({
       id: p.id,
       name: p.name,
       price: p.price,
-      quantity: p.qty ?? 0,
+      // FIX: Check for 'Qty' (database) OR 'qty' OR 'quantity' and default to 0
+      quantity: p.Qty ?? p.qty ?? p.quantity ?? 0, 
       image: p.uri || "/images/default.jpg",
     }));
 
@@ -138,82 +137,146 @@ app.get("/cart", async (req, res) => {
   res.json(detailed);
 });
 
-// ---------------- Checkout ----------------
 app.post("/checkout", async (req, res) => {
-  if (!req.session.user)
-    return res.status(401).json({ error: "Unauthorized" });
+  const username = req.session.user;
+  const cartItems = req.session.cart;
 
-  const cart = req.session.cart || [];
-  if (!cart.length)
-    return res.json({ success: false, message: "Cart is empty." });
-
-  const client = await pool.connect();
+  if (!username) return res.status(401).json({ success: false, message: "Unauthorized" });
+  if (!cartItems || cartItems.length === 0) {
+    return res.status(400).json({ success: false, message: "Cart is empty" });
+  }
 
   try {
-    await client.query("BEGIN");
-
-    const inventoryRes = await fetch(INVENTORY_API);
-    const products = await inventoryRes.json();
-
     let totalAmount = 0;
-    const saleItems = cart.map((item) => {
-      const p = products.find((p) => p.id === item.id);
-      const subtotal = Number(p.price) * item.qty;
-      totalAmount += subtotal;
-      return {
-        product_id: item.id,
-        product_name: p.name,
-        price: p.price,
-        quantity: item.qty,
-        subtotal,
-      };
-    });
+    
+    // 1. Process items
+    const enrichedItems = await Promise.all(cartItems.map(async (item) => {
+        const productUrl = `${INVENTORY_SERVICE_URL}/${item.id}`;
+        
+        // A. Fetch current product details
+        const response = await fetch(productUrl);
+        if (!response.ok) throw new Error(`Product ${item.id} not found in inventory`);
+        
+        const productData = await response.json();
+        
+        // --- DEBUG LOGGING: See exactly what the Inventory sends ---
+        console.log(`Checking stock for ${item.id}:`, productData);
 
-    const saleResult = await client.query(
+        // --- ROBUST FIX: Check all common casing variations ---
+        // This handles 'Qty', 'qty', or 'quantity' automatically
+        const currentStock = productData.Qty ?? productData.qty ?? productData.quantity ?? 0;
+        
+        // Use lowercase 'qty' for the cart item (this comes from your session)
+        const requestedQty = item.qty; 
+
+        // B. Check stock
+        if (currentStock < requestedQty) {
+            throw new Error(`Not enough stock for ${productData.name}. (Has: ${currentStock}, Needs: ${requestedQty})`);
+        }
+
+        // C. Calculate new quantity
+        const newStock = currentStock - requestedQty;
+
+        // D. UPDATE INVENTORY
+        // We send back the exact object we received, but with the updated quantity property.
+        // We explicitly update 'Qty' because you confirmed the DB expects that.
+        const updateBody = { ...productData };
+        
+        // Ensure we update the correct field name that holds the data
+        if (productData.hasOwnProperty('Qty')) updateBody.Qty = newStock;
+        else if (productData.hasOwnProperty('qty')) updateBody.qty = newStock;
+        else if (productData.hasOwnProperty('quantity')) updateBody.quantity = newStock;
+        else updateBody.Qty = newStock; // Default fallback
+
+        await fetch(productUrl, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(updateBody)
+        });
+
+        // E. Add to total for Sales DB
+        totalAmount += productData.price * requestedQty;
+        
+        return {
+            product_id: item.id,
+            quantity: requestedQty,
+            price: productData.price
+        };
+    }));
+
+    // 2. Insert into 'sales' table
+    const saleResult = await pool.query(
       "INSERT INTO sales (username, total_amount) VALUES ($1, $2) RETURNING id",
-      [req.session.user, totalAmount]
+      [username, totalAmount]
     );
-
     const saleId = saleResult.rows[0].id;
 
-    for (const item of saleItems) {
-      await client.query(
-        "INSERT INTO sale_items (sale_id, product_id, product_name, price, quantity, subtotal) VALUES ($1,$2,$3,$4,$5,$6)",
-        [
-          saleId,
-          item.product_id,
-          item.product_name,
-          item.price,
-          item.quantity,
-          item.subtotal,
-        ]
+    // 3. Insert into 'sale_items' table
+    for (const item of enrichedItems) {
+      await pool.query(
+        "INSERT INTO sale_items (sale_id, product_id, quantity) VALUES ($1, $2, $3)",
+        [saleId, item.product_id, item.quantity]
       );
     }
 
-    for (const item of cart) {
-      await fetch(
-        `${INVENTORY_API}/${item.id}/adjust-qty?delta=${-item.qty}`,
-        { method: "PATCH" }
-      );
-    }
-
-    await client.query("COMMIT");
+    // 4. CLEAR CART
     req.session.cart = [];
 
-    broadcast({
-      type: "new_sale",
-      data: { saleId, totalAmount },
+    // 5. Success Response
+    res.json({ success: true, message: "Sale successful", saleId, totalAmount });
+    
+    broadcast({ type: "new_sale", data: { username, totalAmount } });
+
+  } catch (error) {
+    console.error("Checkout Error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.get("/sales", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM sales_summary");
+    const flatData = result.rows;
+
+    // 1. Fetch details for all items
+    const enrichedData = await Promise.all(flatData.map(async (row) => {
+        try {
+            const response = await fetch(`${INVENTORY_SERVICE_URL}/${row.product_id}`);
+            const product = await response.json();
+            return { ...row, product_name: product.name, price: product.price };
+        } catch (e) {
+            return { ...row, product_name: "Unknown", price: 0 };
+        }
+    }));
+
+    // 2. Group items by Sale ID
+    const salesMap = {};
+    enrichedData.forEach((row) => {
+        if (!salesMap[row.sale_id]) {
+            salesMap[row.sale_id] = {
+                id: row.sale_id,
+                username: row.username,
+                total_amount: row.total_amount,
+                sale_date: row.sale_date,
+                items: []
+            };
+        }
+        if (row.product_id) { // Check if there are items
+            salesMap[row.sale_id].items.push({
+                product_name: row.product_name,
+                quantity: row.quantity,
+                subtotal: row.price * row.quantity 
+            });
+        }
     });
 
-    res.json({
-      success: true,
-      message: `Checkout successful! Total: ₱${totalAmount.toFixed(2)}`,
-    });
-  } catch (err) {
-    await client.query("ROLLBACK");
-    res.status(500).json({ error: "Checkout failed." });
-  } finally {
-    client.release();
+    // 3. Convert back to array
+    const groupedSales = Object.values(salesMap);
+    
+    res.json(groupedSales);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send("Server Error");
   }
 });
 
