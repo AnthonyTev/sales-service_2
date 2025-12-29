@@ -217,6 +217,36 @@ app.post("/checkout", async (req, res) => {
   }
 });
 
+// ---------------- Sales History ----------------
+app.get("/sales", async (req, res) => {
+  // Ensure user is logged in
+  if (!req.session.user)
+    return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    // 1. Get the 10 most recent sales
+    const salesRes = await pool.query(
+      "SELECT * FROM sales ORDER BY sale_date DESC LIMIT 10"
+    );
+    const sales = salesRes.rows;
+
+    // 2. For each sale, get the associated items
+    for (const sale of sales) {
+      const itemsRes = await pool.query(
+        "SELECT * FROM sale_items WHERE sale_id = $1",
+        [sale.id]
+      );
+      sale.items = itemsRes.rows;
+    }
+
+    // 3. Send the complete data back to the frontend
+    res.json(sales);
+  } catch (err) {
+    console.error("Error fetching sales history:", err.message);
+    res.status(500).json({ error: "Failed to load sales history." });
+  }
+});
+
 // ---------------- Start server ----------------
 server.listen(3001, () =>
   console.log("Sales Service running on http://localhost:3001")
