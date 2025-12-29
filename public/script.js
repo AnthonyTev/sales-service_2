@@ -5,7 +5,9 @@ function connectWebSocket() {
 
   ws.onopen = () => {
     console.log("Sales WebSocket connected");
-    showNotification("Connected to sales updates", "success");
+    showNotification("Connected to real-time updates", "success");
+    // Request initial inventory snapshot
+    ws.send(JSON.stringify({ type: "subscribe_inventory" }));
   };
 
   ws.onmessage = (event) => {
@@ -24,65 +26,148 @@ function connectWebSocket() {
 }
 
 function handleWebSocketMessage(data) {
-  if (data.type === "new_sale") {
-    showNotification(
-      `New sale: ${data.data.username} - ₱${data.data.totalAmount.toFixed(2)}`,
-      "info"
-    );
-    loadProducts();
-    loadSalesHistory();
+  console.log("WebSocket message:", data);
+  
+  switch(data.type) {
+    case "new_sale":
+      showNotification(
+        `New sale: ₱${data.data.totalAmount.toFixed(2)}`,
+        "info"
+      );
+      loadSalesHistory();
+      break;
+      
+    case "inventory_update":
+      handleInventoryUpdate(data.action, data.data);
+      break;
+      
+    case "inventory_refresh":
+      // Full refresh of products
+      loadProducts();
+      break;
+      
+    case "inventory_snapshot":
+      // Initial load of products
+      renderProducts(data.data);
+      break;
   }
 }
 
-// ---------- SignalR (Inventory updates) ----------
-let inventoryConnection;
-
-function connectInventorySignalR() {
-  inventoryConnection = new signalR.HubConnectionBuilder()
-    .withUrl("http://localhost:5145/hubs/notifications")
-    .withAutomaticReconnect()
-    .build();
-
-  inventoryConnection.on("ReceiveNotification", (message) => {
-    console.log("Inventory update:", message);
-    showNotification("Inventory updated", "info");
-    loadProducts(); // 🔥 auto refresh products
-  });
-
-  inventoryConnection
-    .start()
-    .then(() => console.log("Connected to Inventory SignalR"))
-    .catch((err) => console.error("SignalR error:", err));
+// ---------- Handle real-time inventory updates ----------
+function handleInventoryUpdate(action, product) {
+  console.log(`Inventory ${action}:`, product);
+  
+  switch(action) {
+    case "Product added":
+      addProductToUI(product);
+      showNotification(`"${product.name}" added`, "success");
+      break;
+      
+    case "Product updated":
+      updateProductInUI(product);
+      showNotification(`"${product.name}" updated`, "info");
+      break;
+      
+    case "Product deleted":
+      removeProductFromUI(product.id);
+      showNotification(`"${product.name}" deleted`, "error");
+      break;
+      
+    case "Product quantity adjusted":
+      updateProductQuantity(product.id, product.qty);
+      showNotification(`"${product.name}" quantity: ${product.qty}`, "info");
+      break;
+  }
 }
 
-// ---------- Notifications ----------
-function showNotification(message, type = "info") {
-  const notif = document.createElement("div");
-  notif.style.cssText = `
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    padding: 15px 20px;
-    background: ${
-      type === "success"
-        ? "#2ecc71"
-        : type === "error"
-        ? "#e74c3c"
-        : "#3498db"
-    };
-    color: white;
-    border-radius: 8px;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.2);
-    z-index: 1000;
-    animation: slideIn 0.3s ease-out;
-  `;
-  notif.textContent = message;
-  document.body.appendChild(notif);
+// ---------- Helper functions to update UI without full refresh ----------
+function addProductToUI(product) {
+  const list = document.getElementById("productList");
+  if (!list) return;
+  
+  const li = document.createElement("li");
+  li.innerHTML = createProductHTML(product);
+  list.appendChild(li);
+}
 
-  setTimeout(() => {
-    notif.style.animation = "slideOut 0.3s ease-out";
-    setTimeout(() => notif.remove(), 300);
-  }, 3000);
+function updateProductInUI(product) {
+  const list = document.getElementById("productList");
+  if (!list) return;
+  
+  // Find existing product
+  const items = list.getElementsByTagName("li");
+  for (let item of items) {
+    const button = item.querySelector("button");
+    if (button && button.onclick && button.onclick.toString().includes(`addToCart(${product.id})`)) {
+      // Update the entire product element
+      item.innerHTML = createProductHTML(product);
+      break;
+    }
+  }
+}
+
+function removeProductFromUI(productId) {
+  const list = document.getElementById("productList");
+  if (!list) return;
+  
+  const items = list.getElementsByTagName("li");
+  for (let i = 0; i < items.length; i++) {
+    const button = items[i].querySelector("button");
+    if (button && button.onclick && button.onclick.toString().includes(`addToCart(${productId})`)) {
+      list.removeChild(items[i]);
+      break;
+    }
+  }
+}
+
+function updateProductQuantity(productId, newQty) {
+  const list = document.getElementById("productList");
+  if (!list) return;
+  
+  const items = list.getElementsByTagName("li");
+  for (let item of items) {
+    const button = item.querySelector("button");
+    if (button && button.onclick && button.onclick.toString().includes(`addToCart(${productId})`)) {
+      // Update quantity text
+      const qtyElement = item.querySelector("small");
+      if (qtyElement) {
+        qtyElement.textContent = `Available: ${newQty}`;
+      }
+      
+      // Update button state
+      button.disabled = newQty <= 0;
+      button.textContent = newQty <= 0 ? "Out of Stock" : "Add";
+      break;
+    }
+  }
+}
+
+function createProductHTML(p) {
+  const product = {
+    id: p.id,
+    name: p.name,
+    price: p.price,
+    quantity: p.qty || p.quantity || 0,
+    image: p.uri || p.image || "/images/default.jpg"
+  };
+  
+  return `
+    <div style="text-align:left; display:flex; gap:10px; align-items:center;">
+      <img 
+        src="${product.image}" 
+        alt="${product.name}"
+        style="width:80px;height:80px;border-radius:8px;object-fit:cover;"
+      >
+      <div>
+        <strong>${product.name}</strong><br>
+        ₱${product.price}<br>
+        <small>Available: ${product.quantity}</small>
+      </div>
+    </div>
+    <button onclick="addToCart(${product.id})" ${product.quantity <= 0 ? "disabled" : ""}>
+      ${product.quantity <= 0 ? "Out of Stock" : "Add"}
+    </button>
+  `;
 }
 
 // ---------- Products ----------
@@ -94,30 +179,18 @@ async function loadProducts() {
   }
 
   const products = await res.json();
+  renderProducts(products);
+}
+
+function renderProducts(products) {
   const list = document.getElementById("productList");
+  if (!list) return;
+  
   list.innerHTML = "";
 
   products.forEach((p) => {
     const li = document.createElement("li");
-    li.innerHTML = `
-      <div style="text-align:left; display:flex; gap:10px; align-items:center;">
-        <img 
-          src="${p.image}" 
-          alt="${p.name}"
-          style="width:80px;height:80px;border-radius:8px;object-fit:cover;"
-        >
-        <div>
-          <strong>${p.name}</strong><br>
-          ₱${p.price}<br>
-          <small>Available: ${p.quantity}</small>
-        </div>
-      </div>
-      <button onclick="addToCart(${p.id})" ${
-        p.quantity <= 0 ? "disabled" : ""
-      }>
-        ${p.quantity <= 0 ? "Out of Stock" : "Add"}
-      </button>
-    `;
+    li.innerHTML = createProductHTML(p);
     list.appendChild(li);
   });
 
@@ -166,9 +239,9 @@ async function checkout() {
 
   if (data.success) {
     showNotification(data.message, "success");
-    loadProducts();
     loadCart();
     loadSalesHistory();
+    // Note: products will update automatically via WebSocket
   } else {
     showNotification(data.message || "Checkout failed", "error");
   }
@@ -177,8 +250,6 @@ async function checkout() {
 // ---------- Logout ----------
 async function logout() {
   if (ws) ws.close();
-  if (inventoryConnection) inventoryConnection.stop();
-
   await fetch("/logout", { method: "POST" });
   window.location.href = "login.html";
 }
@@ -226,6 +297,36 @@ async function loadSalesHistory() {
   });
 }
 
+// ---------- Notifications ----------
+function showNotification(message, type = "info") {
+  const notif = document.createElement("div");
+  notif.style.cssText = `
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    padding: 15px 20px;
+    background: ${
+      type === "success"
+        ? "#2ecc71"
+        : type === "error"
+        ? "#e74c3c"
+        : "#3498db"
+    };
+    color: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+    z-index: 1000;
+    animation: slideIn 0.3s ease-out;
+  `;
+  notif.textContent = message;
+  document.body.appendChild(notif);
+
+  setTimeout(() => {
+    notif.style.animation = "slideOut 0.3s ease-out";
+    setTimeout(() => notif.remove(), 300);
+  }, 3000);
+}
+
 // ---------- Animations ----------
 const style = document.createElement("style");
 style.textContent = `
@@ -241,8 +342,7 @@ document.head.appendChild(style);
 
 // ---------- On Load ----------
 window.onload = () => {
-  loadProducts();
-  connectWebSocket();
-  connectInventorySignalR(); // 🔥 THIS IS THE KEY
+  loadProducts(); // Initial load from API
   loadSalesHistory();
+  connectWebSocket(); // Connect to WebSocket for real-time updates
 };
